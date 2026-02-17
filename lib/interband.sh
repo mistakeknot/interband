@@ -37,6 +37,124 @@ interband_path() {
         "$(interband_safe_key "$key")"
 }
 
+interband_channel_dir() {
+    local namespace="${1:-}" channel="${2:-}"
+    [[ -n "$namespace" && -n "$channel" ]] || return 1
+    printf '%s/%s/%s\n' "$(interband_root)" "$namespace" "$channel"
+}
+
+interband_default_retention_secs() {
+    local namespace="${1:-}" channel="${2:-}"
+    case "${namespace}:${channel}" in
+        clavain:dispatch)      echo "21600" ;;  # 6h
+        interlock:coordination) echo "43200" ;; # 12h
+        interphase:bead)       echo "86400" ;;  # 24h
+        *)                     echo "86400" ;;
+    esac
+}
+
+interband_default_max_files() {
+    local namespace="${1:-}" channel="${2:-}"
+    case "${namespace}:${channel}" in
+        clavain:dispatch)      echo "128" ;;
+        interlock:coordination) echo "256" ;;
+        interphase:bead)       echo "256" ;;
+        *)                     echo "256" ;;
+    esac
+}
+
+_interband_to_env_key() {
+    local raw="${1:-}"
+    echo "$raw" | tr '[:lower:]-' '[:upper:]_' | sed -e 's/[^A-Z0-9_]/_/g'
+}
+
+interband_retention_secs() {
+    local namespace="${1:-}" channel="${2:-}"
+    local ns_key ch_key var_name
+    ns_key=$(_interband_to_env_key "$namespace")
+    ch_key=$(_interband_to_env_key "$channel")
+    var_name="INTERBAND_RETENTION_${ns_key}_${ch_key}_SECS"
+
+    if [[ -n "${!var_name:-}" ]]; then
+        echo "${!var_name}"
+    elif [[ -n "${INTERBAND_RETENTION_SECS:-}" ]]; then
+        echo "${INTERBAND_RETENTION_SECS}"
+    else
+        interband_default_retention_secs "$namespace" "$channel"
+    fi
+}
+
+interband_max_files() {
+    local namespace="${1:-}" channel="${2:-}"
+    local ns_key ch_key var_name
+    ns_key=$(_interband_to_env_key "$namespace")
+    ch_key=$(_interband_to_env_key "$channel")
+    var_name="INTERBAND_MAX_FILES_${ns_key}_${ch_key}"
+
+    if [[ -n "${!var_name:-}" ]]; then
+        echo "${!var_name}"
+    elif [[ -n "${INTERBAND_MAX_FILES:-}" ]]; then
+        echo "${INTERBAND_MAX_FILES}"
+    else
+        interband_default_max_files "$namespace" "$channel"
+    fi
+}
+
+interband_prune_channel() {
+    local namespace="${1:-}" channel="${2:-}"
+    [[ -n "$namespace" && -n "$channel" ]] || return 0
+
+    local dir
+    dir=$(interband_channel_dir "$namespace" "$channel" 2>/dev/null) || return 0
+    [[ -d "$dir" ]] || return 0
+
+    local retention_secs max_files prune_interval
+    retention_secs=$(interband_retention_secs "$namespace" "$channel" 2>/dev/null || echo "")
+    max_files=$(interband_max_files "$namespace" "$channel" 2>/dev/null || echo "")
+    prune_interval="${INTERBAND_PRUNE_INTERVAL_SECS:-300}"
+
+    [[ "$retention_secs" =~ ^[0-9]+$ ]] || retention_secs=$(interband_default_retention_secs "$namespace" "$channel")
+    [[ "$max_files" =~ ^[0-9]+$ ]] || max_files=$(interband_default_max_files "$namespace" "$channel")
+    [[ "$prune_interval" =~ ^[0-9]+$ ]] || prune_interval="300"
+
+    local now stamp_file last_prune
+    now=$(date +%s)
+    stamp_file="${dir}/.interband-prune.stamp"
+
+    if [[ -f "$stamp_file" ]]; then
+        last_prune=$(stat -c %Y "$stamp_file" 2>/dev/null || echo "0")
+        if [[ "$last_prune" =~ ^[0-9]+$ ]] && (( now - last_prune < prune_interval )); then
+            return 0
+        fi
+    fi
+    touch "$stamp_file" 2>/dev/null || true
+
+    # Remove files older than retention window.
+    local file mtime
+    while IFS= read -r -d '' file; do
+        mtime=$(stat -c %Y "$file" 2>/dev/null || echo "")
+        [[ "$mtime" =~ ^[0-9]+$ ]] || continue
+        if (( now - mtime > retention_secs )); then
+            rm -f "$file" 2>/dev/null || true
+        fi
+    done < <(find "$dir" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null)
+
+    # Enforce file count cap (keep newest files).
+    if (( max_files > 0 )); then
+        local idx=0
+        while IFS= read -r file; do
+            idx=$((idx + 1))
+            if (( idx > max_files )); then
+                rm -f "$file" 2>/dev/null || true
+            fi
+        done < <(
+            find "$dir" -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\n' 2>/dev/null \
+                | sort -rn \
+                | awk '{$1=""; sub(/^ /,""); print}'
+        )
+    fi
+}
+
 interband_validate_payload() {
     local namespace="${1:-}" type="${2:-}" payload_json="${3:-}"
     [[ -n "$payload_json" ]] || return 1
