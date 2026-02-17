@@ -24,6 +24,24 @@ interband_read_envelope "$path"
 interband_prune_channel interphase bead
 ```
 
+## Go API
+
+```go
+import "github.com/mistakeknot/interband"
+
+path, _ := interband.Path("interphase", "bead", "session-1")
+_ = interband.Write(path, "interphase", "bead_phase", "session-1", map[string]any{
+  "id": "iv-hoqj",
+  "phase": "executing",
+  "reason": "working",
+  "ts": 123,
+})
+
+payload, _ := interband.ReadPayload(path)
+_ = payload
+_ = interband.PruneChannel("interphase", "bead")
+```
+
 ## Versioning
 
 Current protocol version: `1.0.0`.
