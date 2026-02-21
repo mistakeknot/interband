@@ -48,7 +48,10 @@ interband_default_retention_secs() {
     case "${namespace}:${channel}" in
         clavain:dispatch)      echo "21600" ;;  # 6h
         interlock:coordination) echo "43200" ;; # 12h
-        interphase:bead)       echo "86400" ;;  # 24h
+        interphase:bead)        echo "86400" ;;  # 24h
+        intercheck:pressure)   echo "3600" ;;   # 1h (ephemeral, per-session)
+        interstat:budget)      echo "21600" ;;  # 6h
+        intercheck:checkpoint) echo "3600" ;;   # 1h
         *)                     echo "86400" ;;
     esac
 }
@@ -56,10 +59,13 @@ interband_default_retention_secs() {
 interband_default_max_files() {
     local namespace="${1:-}" channel="${2:-}"
     case "${namespace}:${channel}" in
-        clavain:dispatch)      echo "128" ;;
+        clavain:dispatch)       echo "128" ;;
         interlock:coordination) echo "256" ;;
-        interphase:bead)       echo "256" ;;
-        *)                     echo "256" ;;
+        interphase:bead)        echo "256" ;;
+        intercheck:pressure)    echo "64" ;;
+        interstat:budget)       echo "64" ;;
+        intercheck:checkpoint)  echo "32" ;;
+        *)                      echo "256" ;;
     esac
 }
 
@@ -191,6 +197,28 @@ interband_validate_payload() {
                 (.text | type == "string" and length > 0) and
                 (.priority | type == "number" and . >= 0) and
                 (.ts | type == "string" and length > 0)
+            ' >/dev/null 2>&1 || return 1
+            ;;
+        intercheck:context_pressure)
+            echo "$payload_json" | jq -e '
+                (.level | type == "string" and test("^(green|yellow|orange|red)$")) and
+                (.pressure | type == "number" and . >= 0) and
+                (.est_tokens | type == "number" and . >= 0) and
+                (.ts | type == "number")
+            ' >/dev/null 2>&1 || return 1
+            ;;
+        interstat:budget_alert)
+            echo "$payload_json" | jq -e '
+                (.pct_consumed | type == "number" and . >= 0 and . <= 100) and
+                (.total_tokens | type == "number" and . >= 0) and
+                (.session_id | type == "string" and length > 0) and
+                (.ts | type == "number")
+            ' >/dev/null 2>&1 || return 1
+            ;;
+        intercheck:checkpoint_needed)
+            echo "$payload_json" | jq -e '
+                (.trigger | type == "string" and length > 0) and
+                (.ts | type == "number")
             ' >/dev/null 2>&1 || return 1
             ;;
     esac
