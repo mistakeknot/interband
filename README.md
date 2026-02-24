@@ -54,7 +54,7 @@ Known validated payload contracts:
 - `clavain/dispatch`: `name`, `workdir`, `activity`, `started`, `turns`, `commands`, `messages`
 - `interlock/coordination_signal`: `layer`, `icon`, `text`, `priority`, `ts`
 
-## Retention Defaults
+## Retention defaults
 
 - `interphase/bead`: 24h retention, max 256 files
 - `clavain/dispatch`: 6h retention, max 128 files
